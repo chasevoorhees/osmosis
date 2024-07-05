@@ -361,7 +361,7 @@ func NewOsmosisApp(
 		}
 
 		// Create the indexer streaming service.
-		indexerStreamingService := indexerservice.New(writeListeners, coldStartManager, indexerIngester, keepers)
+		indexerStreamingService := indexerservice.New(writeListeners, coldStartManager, indexerIngester, keepers, app.GetTxConfig().TxDecoder())
 
 		// Register the SQS streaming service with the app.
 		app.SetStreamingService(indexerStreamingService)

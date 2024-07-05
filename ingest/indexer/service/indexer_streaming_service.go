@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/cometbft/cometbft/abci/types"
@@ -24,6 +25,10 @@ type indexerStreamingService struct {
 	client domain.Publisher
 
 	keepers domain.Keepers
+
+	txDecoder sdk.TxDecoder
+
+	txnIndexId int
 }
 
 // New creates a new sqsStreamingService.
@@ -31,7 +36,7 @@ type indexerStreamingService struct {
 // sqsIngester is an ingester that ingests the block data into SQS.
 // poolTracker is a tracker that tracks the pools that were changed in the block.
 // nodeStatusChecker is a checker that checks if the node is syncing.
-func New(writeListeners map[storetypes.StoreKey][]storetypes.WriteListener, coldStartManager domain.ColdStartManager, client domain.Publisher, keepers domain.Keepers) baseapp.StreamingService {
+func New(writeListeners map[storetypes.StoreKey][]storetypes.WriteListener, coldStartManager domain.ColdStartManager, client domain.Publisher, keepers domain.Keepers, txDecoder sdk.TxDecoder) baseapp.StreamingService {
 	return &indexerStreamingService{
 
 		writeListeners: writeListeners,
@@ -41,6 +46,8 @@ func New(writeListeners map[storetypes.StoreKey][]storetypes.WriteListener, cold
 		client: client,
 
 		keepers: keepers,
+
+		txDecoder: txDecoder,
 	}
 }
 
@@ -51,6 +58,7 @@ func (s *indexerStreamingService) Close() error {
 
 // ListenBeginBlock implements baseapp.StreamingService.
 func (s *indexerStreamingService) ListenBeginBlock(ctx context.Context, req types.RequestBeginBlock, res types.ResponseBeginBlock) error {
+	s.txnIndexId++
 	return nil
 }
 
@@ -62,7 +70,7 @@ func (s *indexerStreamingService) ListenCommit(ctx context.Context, res types.Re
 // ListenDeliverTx implements baseapp.StreamingService.
 func (s *indexerStreamingService) ListenDeliverTx(ctx context.Context, req types.RequestDeliverTx, res types.ResponseDeliverTx) error {
 	// Publish the transaction data
-	err := s.publishTxn(ctx, res)
+	err := s.publishTxn(ctx, req, res)
 	if err != nil {
 		return err
 	}
@@ -86,16 +94,40 @@ func (s *indexerStreamingService) publishBlock(ctx context.Context, req types.Re
 }
 
 // publishTxn publishes the transaction data to the indexer.
-func (s *indexerStreamingService) publishTxn(ctx context.Context, res types.ResponseDeliverTx) error {
+func (s *indexerStreamingService) publishTxn(ctx context.Context, req types.RequestDeliverTx, res types.ResponseDeliverTx) error {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
-	events := res.GetEvents()
-	if len(events) == 0 {
-		return nil
+
+	// Decode the transaction
+	tx, err := s.txDecoder(req.GetTx())
+	if err != nil {
+		return err
 	}
+
+	//
+	// **tx** doesn't have many methods to be used, the only useful one is GetMsgs()
+	// GetMsgs() seems to be always size 1
+	// Not sure how to decode it but it seems to contain:
+	// - Transaction type, e.g. MsgSwapExactAmountIn
+	// - Associated attributes of the transaction type, e.g.
+	//   -- sender
+	//   -- routes (contains pool id)
+	//   -- token in denom & amount
+	//   -- token out denom & amount
+	//
+	txMessages := tx.GetMsgs()
+	for _, msg := range txMessages {
+		fmt.Println("msg", msg)
+	}
+
+	events := res.GetEvents()
 	txn := domain.Transaction{
-		Height:    uint64(sdkCtx.BlockHeight()),
-		BlockTime: sdkCtx.BlockTime().UTC(),
-		Events:    make([]interface{}, len(events)),
+		Height:             uint64(sdkCtx.BlockHeight()),
+		BlockTime:          sdkCtx.BlockTime().UTC(),
+		TransactionType:    "TBD",
+		TransactionHash:    "TBD",        // Question - Where to get this from?
+		TransactionIndexId: s.txnIndexId, // Resolved. Thanks!
+		EventIndexId:       -1,           // Question - 'token_swapped', 'join_pool', 'exit_pool' event index in events array
+		Events:             make([]interface{}, len(events)),
 	}
 	for i, event := range events {
 		txn.Events[i] = event
@@ -105,6 +137,9 @@ func (s *indexerStreamingService) publishTxn(ctx context.Context, res types.Resp
 
 // ListenEndBlock implements baseapp.StreamingService.
 func (s *indexerStreamingService) ListenEndBlock(ctx context.Context, req types.RequestEndBlock, res types.ResponseEndBlock) error {
+	defer func() {
+		s.txnIndexId = 0
+	}()
 	// Publish the block data
 	err := s.publishBlock(ctx, req)
 	if err != nil {
