@@ -1,14 +1,21 @@
 package domain
 
-import "time"
+import (
+	"time"
+
+	"github.com/cometbft/cometbft/abci/types"
+)
 
 type Transaction struct {
 	Height             uint64        `json:"height"`
 	BlockTime          time.Time     `json:"timestamp"`
-	TransactionType    string        `json:"tx_type"`
+	Sender             string        `json:"sender"`
+	GasWanted          uint64        `json:"gas_wanted"`
+	GasUsed            uint64        `json:"gas_used"`
+	Fees               string        `json:"fees"`
+	MessageType        string        `json:"msg_type"`
 	TransactionHash    string        `json:"tx_hash"`
 	TransactionIndexId int           `json:"tx_index_id"`
-	EventIndexId       int           `json:"event_index_id"`
-	Events             []interface{} `json:"events"`
+	Events             []types.Event `json:"events"`
 	IngestedAt         time.Time     `json:"ingested_at"`
 }

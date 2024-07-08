@@ -2,13 +2,23 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/cometbft/cometbft/abci/types"
+	"github.com/cometbft/cometbft/crypto/tmhash"
 	"github.com/cosmos/cosmos-sdk/baseapp"
 	storetypes "github.com/cosmos/cosmos-sdk/store/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	// transfertypes "github.com/cosmos/ibc-go/v7/modules/apps/transfer/types"
+	// wasmtypes "github.com/CosmWasm/wasmd/x/wasm/types"
+
+	gammtypes "github.com/osmosis-labs/osmosis/v25/x/gamm/types"
+	poolmanagertypes "github.com/osmosis-labs/osmosis/v25/x/poolmanager/types"
 
 	"github.com/osmosis-labs/osmosis/v25/ingest/indexer/domain"
 )
@@ -96,41 +106,221 @@ func (s *indexerStreamingService) publishBlock(ctx context.Context, req types.Re
 // publishTxn publishes the transaction data to the indexer.
 func (s *indexerStreamingService) publishTxn(ctx context.Context, req types.RequestDeliverTx, res types.ResponseDeliverTx) error {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
-
 	// Decode the transaction
 	tx, err := s.txDecoder(req.GetTx())
 	if err != nil {
 		return err
 	}
 
-	//
-	// **tx** doesn't have many methods to be used, the only useful one is GetMsgs()
-	// GetMsgs() seems to be always size 1
-	// Not sure how to decode it but it seems to contain:
-	// - Transaction type, e.g. MsgSwapExactAmountIn
-	// - Associated attributes of the transaction type, e.g.
-	//   -- sender
-	//   -- routes (contains pool id)
-	//   -- token in denom & amount
-	//   -- token out denom & amount
-	//
+	// Calculate the transaction hash
+	txHash := strings.ToUpper(hex.EncodeToString(tmhash.Sum(req.GetTx())))
+
+	// Gas data
+	gasWanted := res.GasWanted
+	gasUsed := res.GasUsed
+
+	// TO DO - Fees. Where is it?
+	fees := "0"
+
+	// Iterate through the messages in the transaction
+	var msgType string
+	var sender string
 	txMessages := tx.GetMsgs()
-	for _, msg := range txMessages {
-		fmt.Println("msg", msg)
+	for _, txMsgGeneric := range txMessages {
+		//
+		// Other msg types to consider:
+		//   import transfertypes "github.com/cosmos/ibc-go/v7/modules/apps/transfer/types"
+		//   import wasmtypes "github.com/CosmWasm/wasmd/x/wasm/types"
+		//
+		// transfertypes.MsgTransfer
+		// wasmtypes.MsgExecuteContract
+		//
+		if txMsg, ok := txMsgGeneric.(*poolmanagertypes.MsgSwapExactAmountIn); ok {
+			// txMsg is a pointer to poolmanagertypes.MsgSwapExactAmountIn
+			// Look for token_swapped event in events
+			msgType = txMsg.Type()
+			sender = txMsg.GetSender()
+			tokenIn := txMsg.GetTokenIn()
+			tokenOutMinAmount := txMsg.TokenOutMinAmount
+			fmt.Printf("sender: %s, tokenIn: %s, tokenOutMinAmount: %s", sender, tokenIn, tokenOutMinAmount)
+			routes := txMsg.GetRoutes()
+			for _, route := range routes {
+				poolId := route.GetPoolId()
+				tokenOutDenom := route.GetTokenOutDenom()
+				fmt.Printf("poolId: %d, tokenOutDenom: %s", poolId, tokenOutDenom)
+			}
+		}
+		if txMsg, ok := txMsgGeneric.(*poolmanagertypes.MsgSwapExactAmountOut); ok {
+			// txMsg is a pointer to poolmanagertypes.MsgSwapExactAmountOut
+			// Look for token_swapped event in events
+			msgType = txMsg.Type()
+			sender = txMsg.GetSender()
+			tokenOut := txMsg.GetTokenOut()
+			tokenInMaxAmount := txMsg.TokenInMaxAmount
+			fmt.Printf("sender: %s, tokenIn: %s, tokenInMaxAmount: %s", sender, tokenOut, tokenInMaxAmount)
+			routes := txMsg.GetRoutes()
+			for _, route := range routes {
+				poolId := route.GetPoolId()
+				tokenInDenom := route.GetTokenInDenom()
+				fmt.Printf("poolId: %d, tokenInDenom: %s", poolId, tokenInDenom)
+			}
+		}
+		if txMsg, ok := txMsgGeneric.(*poolmanagertypes.MsgSplitRouteSwapExactAmountIn); ok {
+			// txMsg is a pointer to poolmanagertypes.MsgSplitRouteSwapExactAmountIn
+			// Look for token_swapped event in events
+			msgType = txMsg.Type()
+			sender = txMsg.GetSender()
+			tokenInDenom := txMsg.GetTokenInDenom()
+			tokenOutMinAmount := txMsg.TokenOutMinAmount
+			fmt.Printf("sender: %s, tokenInDenom: %s, tokenOutMinAmount: %s", sender, tokenInDenom, tokenOutMinAmount)
+			routes := txMsg.GetRoutes()
+			for _, route := range routes {
+				tokenInAmount := route.TokenInAmount
+				pools := route.GetPools()
+				for _, pool := range pools {
+					poolId := pool.GetPoolId()
+					tokenOutDenom := pool.GetTokenOutDenom()
+					fmt.Printf("poolId: %d, tokenOutDenom: %s, tokenInAmount: %s", poolId, tokenOutDenom, tokenInAmount)
+				}
+			}
+		}
+		if txMsg, ok := txMsgGeneric.(*poolmanagertypes.MsgSplitRouteSwapExactAmountOut); ok {
+			// txMsg is a pointer to poolmanagertypes.MsgSplitRouteSwapExactAmountOut
+			// Look for token_swapped event in events
+			msgType = txMsg.Type()
+			sender = txMsg.GetSender()
+			tokenOutDenom := txMsg.GetTokenOutDenom()
+			tokenInMaxAmount := txMsg.TokenInMaxAmount
+			fmt.Printf("sender: %s, tokenIn: %s, tokenInMaxAmount: %s", sender, tokenOutDenom, tokenInMaxAmount)
+			routes := txMsg.GetRoutes()
+			for _, route := range routes {
+				fmt.Println("route", route.GetPools())
+				pools := route.GetPools()
+				for _, pool := range pools {
+					fmt.Println("poolId", pool.GetPoolId())
+					fmt.Println("tokenOutDenom", pool.GetTokenInDenom())
+				}
+			}
+		}
+		if txMsg, ok := txMsgGeneric.(*gammtypes.MsgJoinPool); ok {
+			// txMsg is a pointer to gammtypes.MsgJoinPool
+			// Look for pool_joined event in events
+			msgType = txMsg.Type()
+			sender = txMsg.GetSender()
+			poolId := txMsg.GetPoolId()
+			shareOutAmount := txMsg.ShareOutAmount
+			fmt.Printf("sender: %s, poolId: %s, shareOutAmount: %s", sender, strconv.FormatUint(poolId, 10), shareOutAmount)
+			tokenInMaxs := txMsg.GetTokenInMaxs()
+			for _, tokenInMax := range tokenInMaxs {
+				denom := tokenInMax.GetDenom()
+				amount := tokenInMax.Amount
+				fmt.Printf("denom: %s, amount: %s", denom, amount)
+			}
+		}
+		if txMsg, ok := txMsgGeneric.(*gammtypes.MsgJoinSwapExternAmountIn); ok {
+			// txMsg is a pointer to gammtypes.MsgJoinSwapExternAmountIn
+			// Look for pool_joined event in events
+			msgType = txMsg.Type()
+			sender = txMsg.GetSender()
+			poolId := txMsg.GetPoolId()
+			tokenIn := txMsg.GetTokenIn()
+			shareOutMinAmount := txMsg.ShareOutMinAmount
+			fmt.Printf("sender: %s, poolId: %s, tokenIn: %s, shareOutMinAmount: %s", sender, strconv.FormatUint(poolId, 10), tokenIn, shareOutMinAmount)
+		}
+		if txMsg, ok := txMsgGeneric.(*gammtypes.MsgJoinSwapShareAmountOut); ok {
+			// txMsg is a pointer to gammtypes.MsgJoinSwapExternAmountOut
+			// Look for pool_joined event in events
+			msgType = txMsg.Type()
+			poolId := txMsg.GetPoolId()
+			sender = txMsg.GetSender()
+			tokenInDenom := txMsg.GetTokenInDenom()
+			tokenInMaxAmount := txMsg.TokenInMaxAmount
+			fmt.Printf("sender: %s, poolId: %s, tokenInDenom: %s, tokenInMaxAmount: %s", sender, strconv.FormatUint(poolId, 10), tokenInDenom, tokenInMaxAmount)
+		}
+		if txMsg, ok := txMsgGeneric.(*gammtypes.MsgExitPool); ok {
+			// txMsg is a pointer to gammtypes.MsgExitPool
+			// Look for pool_exited event in events
+			msgType = txMsg.Type()
+			sender = txMsg.GetSender()
+			poolId := txMsg.GetPoolId()
+			shareOutAmount := txMsg.ShareInAmount
+			fmt.Printf("sender: %s, poolId: %s, shareOutAmount: %s", sender, strconv.FormatUint(poolId, 10), shareOutAmount)
+			tokenInMins := txMsg.GetTokenOutMins()
+			for _, tokenOutMin := range tokenInMins {
+				denom := tokenOutMin.GetDenom()
+				amount := tokenOutMin.Amount
+				fmt.Printf("denom: %s, amount: %s", denom, amount)
+			}
+		}
+		if txMsg, ok := txMsgGeneric.(*gammtypes.MsgExitSwapExternAmountOut); ok {
+			// txMsg is a pointer to gammtypes.MsgExitSwapExternAmountOut
+			// Look for pool_exited event in events
+			msgType = txMsg.Type()
+			pooldId := txMsg.GetPoolId()
+			sender = txMsg.GetSender()
+			tokenOut := txMsg.GetTokenOut()
+			shareInMaxAmount := txMsg.ShareInMaxAmount
+			fmt.Printf("sender: %s, poolId: %s, tokenOut: %s, shareInMaxAmount: %s", sender, strconv.FormatUint(pooldId, 10), tokenOut, shareInMaxAmount)
+		}
+		if txMsg, ok := txMsgGeneric.(*gammtypes.MsgExitSwapShareAmountIn); ok {
+			// txMsg is a pointer to gammtypes.MsgExitSwapShareAmountIn
+			// Look for pool_exited event in events
+			msgType = txMsg.Type()
+			sender = txMsg.GetSender()
+			poolId := txMsg.GetPoolId()
+			tokenOutDenom := txMsg.TokenOutDenom
+			tokenOutMinAmount := txMsg.TokenOutMinAmount
+			shareInAmount := txMsg.ShareInAmount
+			fmt.Printf("sender: %s, poolId: %s, tokenOutDenom: %s, tokenOutMinAmount: %s, shareInAmount: %s", sender, strconv.FormatUint(poolId, 10), tokenOutDenom, tokenOutMinAmount, shareInAmount)
+		}
+		if txMsg, ok := txMsgGeneric.(*gammtypes.MsgSwapExactAmountIn); ok {
+			// txMsg is a pointer to gammtypes.MsgSwapExactAmountIn
+			// Look for token_swapped event in events
+			msgType = txMsg.Type()
+			sender = txMsg.GetSender()
+			tokenIn := txMsg.GetTokenIn()
+			tokenOutMinAmount := txMsg.TokenOutMinAmount
+			fmt.Printf("sender: %s, tokenIn: %s, tokenOutMinAmount: %s", sender, tokenIn, tokenOutMinAmount)
+			routes := txMsg.GetRoutes()
+			for _, route := range routes {
+				poolId := route.GetPoolId()
+				tokenOutDenom := route.GetTokenOutDenom()
+				fmt.Printf("poolId: %d, tokenOutDenom: %s", poolId, tokenOutDenom)
+			}
+		}
+		if txMsg, ok := txMsgGeneric.(*gammtypes.MsgSwapExactAmountOut); ok {
+			// txMsg is a pointer to gammtypes.MsgSwapExactAmountOut
+			// Look for token_swapped event in events
+			msgType = txMsg.Type()
+			sender = txMsg.GetSender()
+			tokenOut := txMsg.GetTokenOut()
+			tokenInMaxAmount := txMsg.TokenInMaxAmount
+			fmt.Printf("sender: %s, tokenIn: %s, tokenOutMinAmount: %s", sender, tokenOut, tokenInMaxAmount)
+			routes := txMsg.GetRoutes()
+			for _, route := range routes {
+				poolId := route.GetPoolId()
+				tokenInDenom := route.GetTokenInDenom()
+				fmt.Printf("poolId: %d, tokenInDenom: %s", poolId, tokenInDenom)
+			}
+		}
+	}
+
+	if msgType == "" {
+		// TO DO - should log this error
+		return nil
 	}
 
 	events := res.GetEvents()
 	txn := domain.Transaction{
-		Height:             uint64(sdkCtx.BlockHeight()),
-		BlockTime:          sdkCtx.BlockTime().UTC(),
-		TransactionType:    "TBD",
-		TransactionHash:    "TBD",        // Question - Where to get this from?
-		TransactionIndexId: s.txnIndexId, // Resolved. Thanks!
-		EventIndexId:       -1,           // Question - 'token_swapped', 'join_pool', 'exit_pool' event index in events array
-		Events:             make([]interface{}, len(events)),
-	}
-	for i, event := range events {
-		txn.Events[i] = event
+		Height:          uint64(sdkCtx.BlockHeight()),
+		BlockTime:       sdkCtx.BlockTime().UTC(),
+		Sender:          sender,
+		GasWanted:       uint64(gasWanted),
+		GasUsed:         uint64(gasUsed),
+		Fees:            fees,
+		MessageType:     msgType,
+		TransactionHash: txHash,
+		Events:          events,
 	}
 	return s.client.PublishTransaction(sdkCtx, txn)
 }
@@ -146,48 +336,50 @@ func (s *indexerStreamingService) ListenEndBlock(ctx context.Context, req types.
 		return err
 	}
 
-	// If did not ingest initial data yet, ingest it now
-	if !s.coldStartManager.HasIngestedInitialData() {
-		sdkCtx := sdk.UnwrapSDKContext(ctx)
+	/*
+		// If did not ingest initial data yet, ingest it now
+		if !s.coldStartManager.HasIngestedInitialData() {
+			sdkCtx := sdk.UnwrapSDKContext(ctx)
 
-		var err error
+			var err error
 
-		// Ingest the initial data
-		s.keepers.BankKeeper.IterateTotalSupply(sdkCtx, func(coin sdk.Coin) bool {
-			// Check if the denom should be filtered out and skip it if so
-			if domain.ShouldFilterDenom(coin.Denom) {
+			// Ingest the initial data
+			s.keepers.BankKeeper.IterateTotalSupply(sdkCtx, func(coin sdk.Coin) bool {
+				// Check if the denom should be filtered out and skip it if so
+				if domain.ShouldFilterDenom(coin.Denom) {
+					return false
+				}
+
+				// Publish the token supply
+				err = s.client.PublishTokenSupply(sdkCtx, domain.TokenSupply{
+					Denom:  coin.Denom,
+					Supply: coin.Amount,
+				})
+
+				// Skip any error silently but log it.
+				if err != nil {
+					// TODO: alert
+					sdkCtx.Logger().Error("failed to publish token supply", "error", err)
+				}
+
+				supplyOffset := s.keepers.BankKeeper.GetSupplyOffset(sdkCtx, coin.Denom)
+
+				// If supply offset is non-zero, publish it.
+				if !supplyOffset.IsZero() {
+					// Publish the token supply offset
+					err = s.client.PublishTokenSupplyOffset(sdkCtx, domain.TokenSupplyOffset{
+						Denom:        coin.Denom,
+						SupplyOffset: supplyOffset,
+					})
+				}
+
 				return false
-			}
-
-			// Publish the token supply
-			err = s.client.PublishTokenSupply(sdkCtx, domain.TokenSupply{
-				Denom:  coin.Denom,
-				Supply: coin.Amount,
 			})
 
-			// Skip any error silently but log it.
-			if err != nil {
-				// TODO: alert
-				sdkCtx.Logger().Error("failed to publish token supply", "error", err)
-			}
-
-			supplyOffset := s.keepers.BankKeeper.GetSupplyOffset(sdkCtx, coin.Denom)
-
-			// If supply offset is non-zero, publish it.
-			if !supplyOffset.IsZero() {
-				// Publish the token supply offset
-				err = s.client.PublishTokenSupplyOffset(sdkCtx, domain.TokenSupplyOffset{
-					Denom:        coin.Denom,
-					SupplyOffset: supplyOffset,
-				})
-			}
-
-			return false
-		})
-
-		// Mark that the initial data has been ingested
-		s.coldStartManager.MarkInitialDataIngested()
-	}
+			// Mark that the initial data has been ingested
+			s.coldStartManager.MarkInitialDataIngested()
+		}
+	*/
 
 	return nil
 }
