@@ -336,50 +336,48 @@ func (s *indexerStreamingService) ListenEndBlock(ctx context.Context, req types.
 		return err
 	}
 
-	/*
-		// If did not ingest initial data yet, ingest it now
-		if !s.coldStartManager.HasIngestedInitialData() {
-			sdkCtx := sdk.UnwrapSDKContext(ctx)
+	// If did not ingest initial data yet, ingest it now
+	if !s.coldStartManager.HasIngestedInitialData() {
+		sdkCtx := sdk.UnwrapSDKContext(ctx)
 
-			var err error
+		var err error
 
-			// Ingest the initial data
-			s.keepers.BankKeeper.IterateTotalSupply(sdkCtx, func(coin sdk.Coin) bool {
-				// Check if the denom should be filtered out and skip it if so
-				if domain.ShouldFilterDenom(coin.Denom) {
-					return false
-				}
-
-				// Publish the token supply
-				err = s.client.PublishTokenSupply(sdkCtx, domain.TokenSupply{
-					Denom:  coin.Denom,
-					Supply: coin.Amount,
-				})
-
-				// Skip any error silently but log it.
-				if err != nil {
-					// TODO: alert
-					sdkCtx.Logger().Error("failed to publish token supply", "error", err)
-				}
-
-				supplyOffset := s.keepers.BankKeeper.GetSupplyOffset(sdkCtx, coin.Denom)
-
-				// If supply offset is non-zero, publish it.
-				if !supplyOffset.IsZero() {
-					// Publish the token supply offset
-					err = s.client.PublishTokenSupplyOffset(sdkCtx, domain.TokenSupplyOffset{
-						Denom:        coin.Denom,
-						SupplyOffset: supplyOffset,
-					})
-				}
-
+		// Ingest the initial data
+		s.keepers.BankKeeper.IterateTotalSupply(sdkCtx, func(coin sdk.Coin) bool {
+			// Check if the denom should be filtered out and skip it if so
+			if domain.ShouldFilterDenom(coin.Denom) {
 				return false
+			}
+
+			// Publish the token supply
+			err = s.client.PublishTokenSupply(sdkCtx, domain.TokenSupply{
+				Denom:  coin.Denom,
+				Supply: coin.Amount,
 			})
 
-			// Mark that the initial data has been ingested
-			s.coldStartManager.MarkInitialDataIngested()
-		}
-	*/
+			// Skip any error silently but log it.
+			if err != nil {
+				// TODO: alert
+				sdkCtx.Logger().Error("failed to publish token supply", "error", err)
+			}
+
+			supplyOffset := s.keepers.BankKeeper.GetSupplyOffset(sdkCtx, coin.Denom)
+
+			// If supply offset is non-zero, publish it.
+			if !supplyOffset.IsZero() {
+				// Publish the token supply offset
+				err = s.client.PublishTokenSupplyOffset(sdkCtx, domain.TokenSupplyOffset{
+					Denom:        coin.Denom,
+					SupplyOffset: supplyOffset,
+				})
+			}
+
+			return false
+		})
+
+		// Mark that the initial data has been ingested
+		s.coldStartManager.MarkInitialDataIngested()
+	}
 
 	return nil
 }
